@@ -1,7 +1,6 @@
 import logging
 import signal
 import time
-import uuid
 
 from datetime import datetime, timedelta
 from itertools import repeat
@@ -14,13 +13,13 @@ from redis import WatchError
 
 from .utils import from_unix, to_unix
 
-import croniter
+from croniter import croniter
 
 logger = logging.getLogger(__name__)
 
 
 class Scheduler(object):
-    scheduler_key = 'rq:scheduler:{}'.format(uuid.uuid())
+    scheduler_key = 'rq:scheduler'
     scheduled_jobs_key = 'rq:scheduler:scheduled_jobs'
 
     def __init__(self, queue_name='default', interval=60, connection=None):
@@ -32,6 +31,9 @@ class Scheduler(object):
 
     def register_birth(self):
         key = self.scheduler_key
+        if self.connection.exists(self.scheduler_key) and \
+                not self.connection.hexists(self.scheduler_key, 'death'):
+                    raise ValueError("There's already an active RQ scheduler")
         now = time.time()
         with self.connection._pipeline() as p:
             p.delete(key)
@@ -46,7 +48,7 @@ class Scheduler(object):
         """Registers its own death."""
         with self.connection._pipeline() as p:
             p.hset(self.scheduler_key, 'death', time.time())
-            p.expire(self.scheduler_key, self._interval)
+            p.expire(self.scheduler_key, int(self._interval))
             p.execute()
 
     def _install_signal_handlers(self):
@@ -71,6 +73,8 @@ class Scheduler(object):
         """
         Creates an RQ job and saves it to Redis.
         """
+        if func.__module__ == '__main__':
+            raise ValueError('func can\'t be __main__')
         if args is None:
             args = ()
         if kwargs is None:
@@ -82,10 +86,10 @@ class Scheduler(object):
             job.save()
         return job
 
-    def _next_scheduled_time(schedule):
+    def _next_scheduled_time(self, schedule):
         now = datetime.utcnow()
         itr = croniter(schedule, now)
-        return itr.get_next(datetime.datetime)
+        return itr.get_next(datetime)
 
     def enqueue_at(self, scheduled_time, func, *args, **kwargs):
         """
@@ -123,23 +127,52 @@ class Scheduler(object):
                               job.id)
         return job
 
-    def schedule(self, schedule, func, args=None, kwargs=None,
-                 result_ttl=None, timeout=None, queue_name=None):
+    def schedule(self, scheduled_time, func, args=None, kwargs=None,
+                 interval=None, repeat=None, result_ttl=None, timeout=None,
+                 queue_name=None):
         """
         Schedule a job to be periodically executed, at a certain interval.
+        """
+        # Set result_ttl to -1 for periodic jobs, if result_ttl not specified
+        if interval is not None and result_ttl is None:
+            result_ttl = -1
+        job = self._create_job(func, args=args, kwargs=kwargs, commit=False,
+                               result_ttl=result_ttl, queue_name=queue_name)
+        if interval is not None:
+            job.meta['interval'] = int(interval)
+        if repeat is not None:
+            job.meta['repeat'] = int(repeat)
+        if repeat and interval is None:
+            raise ValueError("Can't repeat a job without interval argument")
+        if timeout is not None:
+            job.timeout = timeout
+        job.save()
+        self.connection._zadd(self.scheduled_jobs_key,
+                              to_unix(scheduled_time),
+                              job.id)
+        return job
+
+    def schedule_cron(self, schedule, func, args=None, kwargs=None,
+                      result_ttl=None, timeout=None, queue_name=None):
+        """
+        Schedule a job to be crontab job
         """
         # Set result_ttl to -1 for periodic jobs, if result_ttl not specified
         if schedule is not None and result_ttl is None:
             result_ttl = -1
         job = self._create_job(func, args=args, kwargs=kwargs, commit=False,
                                result_ttl=result_ttl, queue_name=queue_name)
-        if schedule is not None:
-            job.meta['schedule'] = schedule
+        if schedule is None:
+            raise ValueError("Can't schedule_cron without schedule")
+        job.meta['schedule'] = schedule
+        job.meta['should_run_at'] = to_unix(
+            self._next_scheduled_time(schedule))
         if timeout is not None:
             job.timeout = timeout
+
         job.save()
         self.connection._zadd(self.scheduled_jobs_key,
-                              to_unix(self._next_scheduled_time(schedule)),
+                              job.meta['should_run_at'],
                               job.id)
         return job
 
@@ -203,9 +236,10 @@ class Scheduler(object):
             until = to_unix(until)
         elif isinstance(until, timedelta):
             until = to_unix((datetime.utcnow() + until))
-        job_ids = self.connection.zrangebyscore(self.scheduled_jobs_key, 0,
-                                                until, withscores=with_times,
-                                                score_cast_func=epoch_to_datetime)
+        job_ids = self.connection.zrangebyscore(
+            self.scheduled_jobs_key, 0,
+            until, withscores=with_times,
+            score_cast_func=epoch_to_datetime)
         if not with_times:
             job_ids = zip(job_ids, repeat(None))
         jobs = []
@@ -245,6 +279,8 @@ class Scheduler(object):
         self.log.debug('Pushing {0} to {1}'.format(job.id, job.origin))
 
         schedule = job.meta.get('schedule', None)
+        interval = job.meta.get('interval', None)
+        repeat = job.meta.get('repeat', None)
 
         job.enqueued_at = datetime.utcnow()
         job.save()
@@ -254,9 +290,20 @@ class Scheduler(object):
         queue.push_job_id(job.id)
         self.connection.zrem(self.scheduled_jobs_key, job.id)
 
+        # If this is a repeat job and counter has reached 0, don't repeat
+        if repeat is not None:
+            # If job is a repeated job, decrement counter
+            job.meta['repeat'] = int(repeat) - 1
+            if job.meta['repeat'] == 0:
+                return
+
         if schedule:
             self.connection._zadd(self.scheduled_jobs_key,
                                   to_unix(self._next_scheduled_time(schedule)),
+                                  job.id)
+        elif interval:
+            self.connection._zadd(self.scheduled_jobs_key,
+                                  to_unix(datetime.utcnow()) + int(interval),
                                   job.id)
 
     def enqueue_jobs(self):
