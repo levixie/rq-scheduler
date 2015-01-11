@@ -8,6 +8,7 @@ from itertools import repeat
 from rq.exceptions import NoSuchJobError
 from rq.job import Job
 from rq.queue import Queue
+from rq.compat import string_types
 
 from redis import WatchError
 
@@ -68,18 +69,19 @@ class Scheduler(object):
         signal.signal(signal.SIGINT, stop)
         signal.signal(signal.SIGTERM, stop)
 
-    def _create_job(self, func, args=None, kwargs=None, commit=True,
+    def _create_job(self, f, args=None, kwargs=None, commit=True,
                     result_ttl=None, queue_name=None):
         """
         Creates an RQ job and saves it to Redis.
         """
-        if func.__module__ == '__main__':
-            raise ValueError('func can\'t be __main__')
+        if not isinstance(f, string_types) and f.__module__ == '__main__':
+            raise ValueError('Functions from the __main__'
+                             'module cannot be processed')
         if args is None:
             args = ()
         if kwargs is None:
             kwargs = {}
-        job = Job.create(func, args=args, connection=self.connection,
+        job = Job.create(f, args=args, connection=self.connection,
                          kwargs=kwargs, result_ttl=result_ttl)
         job.origin = queue_name or self.queue_name
         if commit:
@@ -153,7 +155,8 @@ class Scheduler(object):
         return job
 
     def schedule_cron(self, schedule, func, args=None, kwargs=None,
-                      result_ttl=None, timeout=None, queue_name=None):
+                      repeat=None, result_ttl=None, timeout=None,
+                      queue_name=None):
         """
         Schedule a job to be crontab job
         """
@@ -165,6 +168,8 @@ class Scheduler(object):
         if schedule is None:
             raise ValueError("Can't schedule_cron without schedule")
         job.meta['schedule'] = schedule
+        if repeat is not None:
+            job.meta['repeat'] = int(repeat)
         job.meta['should_run_at'] = to_unix(
             self._next_scheduled_time(schedule))
         if timeout is not None:

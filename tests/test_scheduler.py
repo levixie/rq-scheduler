@@ -293,9 +293,10 @@ class TestScheduler(RQTestCase):
         X (repeat) number of times
         """
         schedule = '*/1 * * * *'
-        # If job is repeated once, the job shouldn't be put back in the queue
+        # If job is repeated twice, the job shouldn't be put back in the queue
+        # at third time
         job = self.scheduler.schedule_cron(
-            schedule=schedule, func=say_hello)
+            schedule=schedule, func=say_hello, repeat=2)
         self.scheduler.enqueue_job(job)
         self.assertIn(
             job.id,
@@ -306,6 +307,11 @@ class TestScheduler(RQTestCase):
         time.sleep(60)
         self.assertEqual(len(self.scheduler.get_jobs()), 1)
         self.assertEqual(len(self.scheduler.get_jobs_to_queue()), 1)
+
+        self.scheduler.enqueue_job(job)
+        time.sleep(60)
+        self.assertEqual(len(self.scheduler.get_jobs()), 0)
+        self.assertEqual(len(self.scheduler.get_jobs_to_queue()), 0)
 
     def test_missing_jobs_removed_from_scheduler(self):
         """
