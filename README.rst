@@ -1,8 +1,8 @@
 ============
-RQ Scheduler
+RQ Scheduler/Crontab
 ============
 
-`RQ Scheduler <https://github.com/ui/rq-scheduler>`_ is a small package that
+`RQ Scheduler <https://github.com/houzz/c2infra/src/rq-scheduler>`_ is a small package that
 adds job scheduling capabilities to `RQ <https://github.com/nvie/rq>`_,
 a `Redis <http://redis.io/>`_ based Python queuing library.
 
@@ -52,7 +52,6 @@ There are two ways you can schedule a job. The first is using RQ Scheduler's ``e
     # complete with args and kwargs.
     scheduler.enqueue_at(datetime(2020, 1, 1, 3, 4), func, foo, bar=baz)
 
-
 The second way is using ``enqueue_in``. Instead of taking a ``datetime`` object,
 this method expects a ``timedelta`` and schedules the job to run at
 X seconds/minutes/hours/days/weeks later. For example, if we want to monitor how
@@ -84,6 +83,15 @@ This is how you do it::
         interval=60,                   # Time before the function is called again, in seconds
         repeat=10                      # Repeat this number of times (None means repeat forever)
     )
+
+    scheduler.schedule_cron(
+        schedule='15 22 * * *',        # Schedule to run at everyday 22:15 in UTC timezone
+        func=func,                     # Function to be queued
+        args=[arg1, arg2],             # Arguments passed into function when executed
+        kwargs={'foo': 'bar'},         # Keyword arguments passed into function when executed
+        repeat=10                      # Repeat this number of times (None means repeat forever)
+    )
+
 
 -------------------------
 Retrieving scheduled jobs
