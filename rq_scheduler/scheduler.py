@@ -1,6 +1,7 @@
 import logging
 import signal
 import time
+import uuid
 
 from datetime import datetime, timedelta
 from itertools import repeat
@@ -302,10 +303,18 @@ class Scheduler(object):
             if job.meta['repeat'] == 0:
                 return
         if schedule:
+            if job.meta.get('parent', None) is None:
+                job.meta['parent'] = job.id
+            job.set_id(str(uuid.uuid4()))
+            job.save()
             self.connection._zadd(self.scheduled_jobs_key,
                                   to_unix(self._next_scheduled_time(schedule)),
                                   job.id)
         elif interval:
+            if job.meta.get('parent', None) is None:
+                job.meta['parent'] = job.id
+            job.set_id(str(uuid.uuid4()))
+            job.save()
             self.connection._zadd(self.scheduled_jobs_key,
                                   to_unix(datetime.utcnow()) + int(interval),
                                   job.id)

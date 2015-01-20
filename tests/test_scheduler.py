@@ -272,10 +272,13 @@ class TestScheduler(RQTestCase):
         # once
         job = self.scheduler.schedule(time_now, say_hello,
                                       interval=interval, repeat=2)
+        parent_id = job.id
         self.scheduler.enqueue_job(job)
         self.assertIn(
             job.id,
             tl(self.testconn.zrange(self.scheduler.scheduled_jobs_key, 0, 1)))
+        self.assertEqual(job.meta['parent'], parent_id)
+
         self.scheduler.enqueue_job(job)
         self.assertNotIn(
             job.id,
