@@ -282,7 +282,7 @@ class TestScheduler(RQTestCase):
             tl(self.testconn.zrange(self.scheduler.scheduled_jobs_key, 0, 1)))
 
         self.scheduler.enqueue_job(job)
-        self.assertIn(
+        self.assertNotIn(
             job.id,
             tl(self.testconn.zrange(self.scheduler.scheduled_jobs_key,
                                     0, 1)))

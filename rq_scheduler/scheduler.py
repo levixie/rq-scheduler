@@ -288,6 +288,9 @@ class Scheduler(object):
         repeat = job.meta.get('repeat', None)
 
         job.enqueued_at = datetime.utcnow()
+        # If job is a repeated job, decrement counter
+        if repeat:
+            job.meta['repeat'] = int(repeat) - 1
         job.save()
 
         queue = self.get_queue_for_job(job)
@@ -295,13 +298,9 @@ class Scheduler(object):
         queue.push_job_id(job.id)
         self.connection.zrem(self.scheduled_jobs_key, job.id)
 
-        # If this is a repeat job and counter has reached 0, don't repeat
         if repeat is not None:
-            # If job is a repeated job, decrement counter
-            job.meta['repeat'] = int(repeat) - 1
             if job.meta['repeat'] == 0:
                 return
-
         if schedule:
             self.connection._zadd(self.scheduled_jobs_key,
                                   to_unix(self._next_scheduled_time(schedule)),
